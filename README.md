@@ -57,7 +57,8 @@ npm run build
 | 特种车辆 | `special_vehicle` | 特种车辆 | 车辆编号、车辆类型、品牌型号 |
 | 航班保障 | `flight_ops` | 航班保障 | 航班号、机尾号、计划到港 |
 | 过站监控 | `turnaround` | 过站记录 | 过站编号、关联航班、计划到港 |
-| 机坪安全 | `apron_safety` | 机坪安全 | 巡查编号、巡查区域、巡查人员 |
+| 机坪安全 | `apron_safety` | 机坪安全 | 巡查编号、区域归属、巡查人员（含 `/apron_safety/:id` 详情、`/apron_safety/batch` 批量整改） |
+| 事故上报 | `incident_report` | 事故上报 | 上报编号、巡查编号、闭环结论（只读引用机坪安全） |
 | 装卸设备 | `load_equip` | 装卸设备 | 设备编号、设备类型、适用机型 |
 | 应急保障 | `air_emergency` | 应急保障 | 应急编号、事件类型、涉及航班 |
 
@@ -68,4 +69,14 @@ npm run build
 - 字段、状态、动作与流转目标集中在 `frontend/src/data/modules.ts`；示例数据在
   `frontend/src/data/seed.ts`。
 - 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断。
+- 机坪安全整改是例外收口：列表按钮、详情页、批量整改三个入口共用
+  `frontend/src/data/apron.ts` 的动作规则与 `frontend/src/api/apron-service.ts` 的写入口
+  （UI 统一为 `components/RectificationDock.vue`）。规则保证：
+  - 状态只能 `待巡查 → 已巡查 → 待整改 → 已闭环` 顺序推进，已闭环不可重复整改；
+  - 复查结果、安全状态只在「确认闭环」落定，整改措施只在「安排整改」落定，历史结论只追加不覆盖；
+  - 跨区域人员不能改动其他责任区的问题；同一问题并发提交闭环只生效一次；
+  - 缺区域归属的存量记录加载时迁移为「未归属区域」并固化原结论，对所有人只读。
+- 事故上报清单不保存整改结论，通过 `apron-service.ts` 的 `sharedConclusion` 按巡查编号
+  只读引用机坪安全记录，两边看到的复查结果/区域归属永远是同一份。
 - 想回到初始数据：清掉浏览器里 `airport-ground-handling:entries` 这一项，或调用 `resetModule(模块)`。
+- 纯规则校验：`node scripts/check-apron.mjs`（用 esbuild 临时打包规则与种子数据后在 Node 里断言）。

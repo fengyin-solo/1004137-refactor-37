@@ -3,10 +3,14 @@
     <header class="page-head">
       <div>
         <h2>机坪安全管理</h2>
-        <p class="page-desc">维护机坪安全，围绕巡查编号、巡查区域、巡查人员、巡查日期做登记、筛选与状态流转。</p>
+        <p class="page-desc">
+          巡查问题的整改、闭环统一走同一份动作规则；列表按钮、详情页、批量入口只是三个薄入口，
+          已闭环问题不可重复整改，跨区域人员不能改动。
+        </p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记机坪安全</button>
+        <OperatorSwitch />
+        <RouterLink class="btn" to="/apron_safety/batch">打开批量整改入口</RouterLink>
         <button class="btn" type="button" @click="exportRows">导出机坪安全清单</button>
       </div>
     </header>
@@ -33,9 +37,35 @@
       <button class="btn ghost" type="button" @click="resetFilters">重置条件</button>
     </form>
 
+    <div class="batch-bar">
+      <span>已选 {{ selectedIds.length }} 条</span>
+      <button
+        v-for="action in batchActions"
+        :key="action.key"
+        class="btn"
+        type="button"
+        :disabled="!selectedIds.length"
+        @click="openBatch(action.key)"
+      >
+        批量{{ action.label }}
+      </button>
+    </div>
+
+    <RectificationDock
+      v-if="dock"
+      :mode="dock.mode"
+      :row="dock.mode === 'single' ? dock.row : undefined"
+      :ids="selectedIds"
+      :action-key="dock.mode === 'batch' ? dock.actionKey : undefined"
+      :operator="operator"
+      @close="dock = null"
+      @done="onDone"
+    />
+
     <table class="data-table">
       <thead>
         <tr>
+          <th class="col-check"><input type="checkbox" :checked="allChecked" @change="toggleAll" /></th>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>当前状态</th>
           <th>可执行动作</th>
@@ -43,22 +73,42 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+          <td class="col-check">
+            <input
+              type="checkbox"
+              :value="row.id"
+              v-model="selected"
+              :disabled="!canModify(row)"
+            />
+          </td>
+          <td v-for="column in columns" :key="column">
+            <template v-if="column === '巡查编号'">
+              <RouterLink class="link" :to="`/apron_safety/${row.id}`">{{ row[column] }}</RouterLink>
+            </template>
+            <template v-else>
+              {{ row[column] || '—' }}<em v-if="column === '区域归属' && row.存量未归属" class="legacy-tag">存量</em>
+            </template>
+          </td>
+          <td>
+            {{ row.status }}
+            <em v-if="row.存量未归属" class="legacy-tag">原结论保留</em>
+          </td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
-              :key="action"
+              v-if="rowAction(row)"
               class="link"
               type="button"
-              @click="runAction(action, row)"
+              :disabled="!canModify(row)"
+              :title="canModify(row) ? '' : denyReason(row)"
+              @click="openSingle(row)"
             >
-              {{ action }}
+              {{ rowAction(row)?.label }}
             </button>
+            <RouterLink class="link" :to="`/apron_safety/${row.id}`">查看详情</RouterLink>
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无机坪安全数据，可先登记机坪安全</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无机坪安全数据</td>
         </tr>
       </tbody>
     </table>
@@ -71,63 +121,122 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
+import { downloadEntries } from '@/api/local-service'
+import { APRON_KEY, currentOperator, listApronRows } from '@/api/apron-service'
+import OperatorSwitch from '@/components/OperatorSwitch.vue'
+import RectificationDock from '@/components/RectificationDock.vue'
 import {
-  downloadEntries,
-  listEntries,
-  moduleMeta,
-  runAction as applyAction,
-} from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+  COLUMN_FIELDS,
+  RECTIFY_ACTIONS,
+  RECTIFY_STATUSES,
+  canModify,
+  denyReason,
+  type ApronField,
+  type ApronRow,
+  type Operator,
+} from '@/data/apron'
 
-const meta = moduleMeta('apron_safety')
-const columns = ["巡查编号", "巡查区域", "巡查人员", "巡查日期", "发现问题", "整改措施", "复查结果", "安全状态"]
-const actions = ["记录巡查", "安排整改", "确认闭环"]
-const statuses = ["待巡查", "已巡查", "待整改", "已闭环"]
-const stats = [{"label": "今日巡查", "value": 0}, {"label": "待整改问题", "value": 0}, {"label": "已闭环问题", "value": 0}]
+const operator = computed<Operator>(() => currentOperator())
 
-const rows = ref<EntryRow[]>([])
+const columns: ApronField[] = COLUMN_FIELDS
+const filterFields: ApronField[] = ['巡查编号', '区域归属', '巡查人员']
+const batchActions = [
+  { key: 'record', label: RECTIFY_ACTIONS.record.label },
+  { key: 'rectify', label: RECTIFY_ACTIONS.rectify.label },
+  { key: 'close', label: RECTIFY_ACTIONS.close.label },
+] as const
+
+const rows = ref<ApronRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
-const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const filters = reactive<Record<string, string>>({})
+const selected = ref<number[]>([])
+
+type DockState =
+  | { mode: 'single'; row: ApronRow; actionKey: keyof typeof RECTIFY_ACTIONS }
+  | { mode: 'batch'; actionKey: keyof typeof RECTIFY_ACTIONS }
+  | null
+const dock = ref<DockState>(null)
+
+const stats = computed(() => [
+  { label: '待整改问题', value: rows.value.filter((row) => String(row.status) === '待整改').length },
+  { label: '已闭环问题', value: rows.value.filter((row) => String(row.status) === '已闭环').length },
+  {
+    label: '存量未归属',
+    value: rows.value.filter((row) => row.存量未归属).length,
+  },
+])
+
 const statusSummary = computed(() =>
-  statuses.map((status: string) => ({
+  [...RECTIFY_STATUSES].map((status) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
 
+const selectedIds = computed(() => selected.value)
+const allChecked = computed(
+  () => rows.value.length > 0 && rows.value.every((row) => !canModify(row) || selected.value.includes(Number(row.id))),
+)
+
+function rowAction(row: ApronRow) {
+  const keyByStatus: Record<string, keyof typeof RECTIFY_ACTIONS> = {
+    待巡查: 'record',
+    已巡查: 'rectify',
+    待整改: 'close',
+  }
+  const key = keyByStatus[String(row.status)]
+  return key ? RECTIFY_ACTIONS[key] : null
+}
+
+function openSingle(row: ApronRow) {
+  const keyByStatus: Record<string, keyof typeof RECTIFY_ACTIONS> = {
+    待巡查: 'record',
+    已巡查: 'rectify',
+    待整改: 'close',
+  }
+  const actionKey = keyByStatus[String(row.status)]
+  if (!actionKey) {
+    return
+  }
+  errorMessage.value = ''
+  dock.value = { mode: 'single', row, actionKey }
+}
+
+function openBatch(actionKey: keyof typeof RECTIFY_ACTIONS) {
+  errorMessage.value = ''
+  dock.value = { mode: 'batch', actionKey }
+}
+
+function toggleAll(event: Event) {
+  const checked = (event.target as HTMLInputElement).checked
+  selected.value = checked ? rows.value.filter((row) => canModify(row)).map((row) => Number(row.id)) : []
+}
+
+function onDone() {
+  dock.value = null
+  selected.value = []
+  reload()
+}
+
 function resetFilters() {
-  filters.value = {}
+  for (const key of Object.keys(filters)) {
+    filters[key] = ''
+  }
   reload()
 }
 
 function exportRows() {
-  downloadEntries(meta.key)
-}
-
-function openCreate() {
-  errorMessage.value = '机坪安全登记入口尚未接入审批流'
-}
-
-function runAction(action: string, row: EntryRow) {
-  errorMessage.value = ''
-  const result = applyAction(meta.key, Number(row.id), action)
-  if (!result.ok) {
-    errorMessage.value = result.message
-    return
-  }
-  reload()
+  downloadEntries(APRON_KEY)
 }
 
 function reload() {
   errorMessage.value = ''
   try {
-    const payload = listEntries(meta.key, filters.value)
-    rows.value = payload.items
-    total.value = payload.total
+    rows.value = listApronRows(filters)
+    total.value = rows.value.length
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '机坪安全列表读取失败'
   }
@@ -135,3 +244,36 @@ function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.col-check {
+  width: 36px;
+  text-align: center;
+}
+.legacy-tag {
+  font-style: normal;
+  margin-left: 6px;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.row-actions .link:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+</style>

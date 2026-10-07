@@ -17,6 +17,9 @@ const SpecialVehicle = () => import('@/views/special_vehicle/index.vue')
 const FlightOps = () => import('@/views/flight_ops/index.vue')
 const Turnaround = () => import('@/views/turnaround/index.vue')
 const ApronSafety = () => import('@/views/apron_safety/index.vue')
+const ApronSafetyDetail = () => import('@/views/apron_safety/detail.vue')
+const ApronSafetyBatch = () => import('@/views/apron_safety/batch.vue')
+const IncidentReport = () => import('@/views/incident_report/index.vue')
 const LoadEquip = () => import('@/views/load_equip/index.vue')
 const AirEmergency = () => import('@/views/air_emergency/index.vue')
 
@@ -40,6 +43,9 @@ const router = createRouter({
     { path: '/flight_ops', name: 'flight_ops', component: FlightOps },
     { path: '/turnaround', name: 'turnaround', component: Turnaround },
     { path: '/apron_safety', name: 'apron_safety', component: ApronSafety },
+    { path: '/apron_safety/batch', name: 'apron_safety_batch', component: ApronSafetyBatch },
+    { path: '/apron_safety/:id', name: 'apron_safety_detail', component: ApronSafetyDetail },
+    { path: '/incident_report', name: 'incident_report', component: IncidentReport },
     { path: '/load_equip', name: 'load_equip', component: LoadEquip },
     { path: '/air_emergency', name: 'air_emergency', component: AirEmergency },
   ],

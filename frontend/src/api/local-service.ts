@@ -30,6 +30,11 @@ export function listEntries(key: string, filters: Record<string, string> = {}): 
 
 export function runAction(key: string, id: number, action: string): ActionResult {
   const meta = moduleMeta(key)
+  // 机坪安全的整改动作必须走统一规则（api/apron-service），列表按钮、详情页、
+  // 批量入口共用那份；通用流转不允许直接改机坪安全记录，防止已闭环被重复整改。
+  if (key === 'apron_safety') {
+    return { ok: false, message: '机坪安全整改请通过列表、详情或批量整改入口提交，规则统一处理' }
+  }
   const target = meta.actionTargets[action]
   if (!target) {
     return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }

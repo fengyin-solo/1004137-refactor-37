@@ -5,7 +5,8 @@ export type EntryRow = {
   status: string
   pending: boolean
   abnormal: boolean
-  [field: string]: string | number | boolean
+  // 个别模块（机坪安全）会在记录上挂结构化的处理记录，放开 object 以兼容。
+  [field: string]: string | number | boolean | object
 }
 
 export type ModuleMeta = {
