@@ -1,6 +1,25 @@
 import { MODULE_BY_KEY } from '@/data/modules'
+import {
+  APRON_SAFETY_KEY,
+  applyRectification,
+  availableActions as actionsFor,
+  canTouch,
+  isClosed,
+  rectificationConclusions,
+  revisionOf,
+} from '@/data/rectification'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
-import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
+import type {
+  ActionResult,
+  BatchRectificationResult,
+  EntryRow,
+  ModuleMeta,
+  OverviewResult,
+  PageResult,
+  RectificationAction,
+  RectificationRequest,
+  RectificationResult,
+} from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
@@ -29,6 +48,10 @@ export function listEntries(key: string, filters: Record<string, string> = {}): 
 }
 
 export function runAction(key: string, id: number, action: string): ActionResult {
+  // 机坪安全整改必须走统一入口（带操作者区域）；通用入口不受理，避免绕过跨区域校验。
+  if (key === APRON_SAFETY_KEY) {
+    return { ok: false, message: '机坪安全整改请使用整改动作入口' }
+  }
   const meta = moduleMeta(key)
   const target = meta.actionTargets[action]
   if (!target) {
@@ -56,6 +79,71 @@ export function runAction(key: string, id: number, action: string): ActionResult
   return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」` }
 }
 
+/* ── 机坪安全整改：列表按钮 / 详情页 / 批量入口共用的唯一写入口 ─────────────── */
+
+export function listRectifications(filters: Record<string, string> = {}): PageResult {
+  return listEntries(APRON_SAFETY_KEY, filters)
+}
+
+export function getRectification(id: number): EntryRow | undefined {
+  return listRows(APRON_SAFETY_KEY).find((row) => Number(row.id) === id)
+}
+
+/** 页面用：当前记录在该操作者区域下可执行的动作，三处入口都从这里取。 */
+export function rectificationActions(
+  row: EntryRow,
+  operatorRegion: string,
+): RectificationAction[] {
+  return actionsFor(row, operatorRegion)
+}
+
+export function rectificationRevision(row: EntryRow): number {
+  return revisionOf(row)
+}
+
+export function canRectify(row: EntryRow, operatorRegion: string): boolean {
+  // 可整改 = 区域可改 且 未闭环（结论冻结）。三个入口共用这一判定。
+  return !isClosed(row) && canTouch(row, operatorRegion)
+}
+
+/**
+ * 唯一整改提交入口。三个入口都调它，规则全部在 data/rectification.ts 里。
+ */
+export function submitRectification(request: RectificationRequest): RectificationResult {
+  const rows = listRows(APRON_SAFETY_KEY)
+  const { result, nextRows } = applyRectification(rows, request)
+  if (result.ok) {
+    saveRows(APRON_SAFETY_KEY, nextRows)
+  }
+  return result
+}
+
+/**
+ * 批量入口：逐条调用同一份规则。每条都在最新数据上按 id 校验版本，
+ * 因此同一问题并发提交闭环时只有第一条生效，其余被判为已更新/已闭环而拦下。
+ */
+export function batchSubmitRectification(
+  requests: RectificationRequest[],
+): BatchRectificationResult {
+  const results: RectificationResult[] = []
+  for (const request of requests) {
+    const result = submitRectification(request)
+    results.push({ ...result, id: request.id })
+  }
+  const rejected = [...new Set(results.filter((r) => !r.ok).map((r) => r.message))]
+  return { results, rejected }
+}
+
+/* ── 事故上报清单（应急保障）共用整改结论：只读同一份数据 ──────────────────── */
+
+export function conclusionByProblem(problem: string) {
+  return rectificationConclusions(listRows(APRON_SAFETY_KEY)).get(problem.trim()) ?? null
+}
+
+export function allRectificationConclusions() {
+  return [...rectificationConclusions(listRows(APRON_SAFETY_KEY)).values()]
+}
+
 export function resetModule(key: string): PageResult {
   resetRows(key)
   return listEntries(key)
@@ -68,7 +156,7 @@ export function exportEntries(key: string): { filename: string; content: string 
   for (const row of listRows(key)) {
     lines.push([row.id, ...meta.fields.map((field) => row[field] ?? ''), row.status].join(','))
   }
-  return { filename: `${meta.name}-清单.csv`, content: `\uFEFF${lines.join('\n')}` }
+  return { filename: `${meta.name}-清单.csv`, content: `﻿${lines.join('\n')}` }
 }
 
 export function downloadEntries(key: string): void {

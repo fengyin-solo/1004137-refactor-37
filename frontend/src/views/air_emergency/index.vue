@@ -2,8 +2,8 @@
   <section class="page" data-module="air_emergency">
     <header class="page-head">
       <div>
-        <h2>应急保障管理</h2>
-        <p class="page-desc">维护应急保障，围绕应急编号、事件类型、涉及航班、事发位置做登记、筛选与状态流转。</p>
+        <h2>应急保障管理（事故上报清单）</h2>
+        <p class="page-desc">事故上报按事件类型关联机坪安全记录，整改结论与机坪安全页面共用同一份数据，本页只读引用。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记应急保障</button>
@@ -38,6 +38,7 @@
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
           <th>当前状态</th>
+          <th>机坪整改结论（共用）</th>
           <th>可执行动作</th>
         </tr>
       </thead>
@@ -45,6 +46,13 @@
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
+          <td>
+            <template v-if="conclusion(row)">
+              <span class="conclusion-text">{{ conclusion(row)?.复查结果 || '（暂无复查结论）' }}</span>
+              <span class="conclusion-meta">{{ conclusion(row)?.status }} · {{ conclusion(row)?.巡查编号 }}</span>
+            </template>
+            <span v-else class="muted-text">未关联整改记录</span>
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -58,13 +66,13 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无应急保障数据，可先登记应急保障</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无应急保障数据，可先登记应急保障</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条应急保障记录</span>
+      <span>共 {{ total }} 条事故上报记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -74,18 +82,18 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  conclusionByProblem,
   downloadEntries,
   listEntries,
   moduleMeta,
   runAction as applyAction,
 } from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import type { EntryRow, RectificationConclusion } from '@/data/types'
 
 const meta = moduleMeta('air_emergency')
 const columns = ["应急编号", "事件类型", "涉及航班", "事发位置", "响应等级", "响应人员", "处置措施", "应急状态"]
 const actions = ["启动响应", "落实处置", "解除应急"]
 const statuses = ["待响应", "响应中", "处置中", "已解除"]
-const stats = [{"label": "待响应事件", "value": 0}, {"label": "处置中事件", "value": 0}, {"label": "已解除事件", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
@@ -98,6 +106,16 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+const stats = computed(() => [
+  { label: '事故上报', value: rows.value.length },
+  { label: '已关联整改结论', value: rows.value.filter((row) => conclusion(row) !== null).length },
+  { label: '已闭环', value: rows.value.filter((row) => conclusion(row)?.status === '已闭环').length },
+])
+
+// 共用结论：不复制、不缓存，每次渲染直接读机坪安全同一份结论。
+function conclusion(row: EntryRow): RectificationConclusion | null {
+  return conclusionByProblem(String(row['事件类型'] ?? ''))
+}
 
 function resetFilters() {
   filters.value = {}
@@ -135,3 +153,9 @@ function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.muted-text { color: var(--muted); font-size: 12px; }
+.conclusion-text { display: block; font-size: 13px; }
+.conclusion-meta { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+</style>
